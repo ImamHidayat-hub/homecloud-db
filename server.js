@@ -1,6 +1,8 @@
 // 1. Panggil semua library yang udah di-install tadi
 const express = require('express');
 const bcrypt = require('bcrypt');
+const multer = require('multer');
+const path = require('path');
 const jwt = require('jsonwebtoken');
 const mysql = require('mysql2');
 const cors = require('cors');
@@ -11,7 +13,21 @@ const app = express();
 
 // 3. Pasang 'satpam' CORS dan izin biar backend bisa nerima data format JSON
 app.use(cors());
-app.use(express.json()); 
+app.use(express.json());
+
+// Ngajarin Multer cara naruh barang ke folder 'uploads'
+const storage = multer.diskStorage({
+    destination: function (req, file, cb) {
+        cb(null, 'uploads/') 
+    },
+    filename: function (req, file, cb) {
+        // Bikin nama file unik biar ga bentrok
+        const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9)
+        cb(null, uniqueSuffix + path.extname(file.originalname))
+    }
+})
+
+const upload = multer({ storage: storage })
 
 // 4. Bikin jembatan koneksi ke Database Ubuntu
 const db = mysql.createPool({
@@ -104,6 +120,40 @@ app.post('/login', (req, res) => {
     });
 });
 
+// ==========================================
+// ENDPOINT 3: UPLOAD FILE (JANTUNG HOMECLOUD)
+// ==========================================
+app.post('/upload', upload.single('fileKu'), (req, res) => {
+    // 1. Cek filenya beneran keangkut ga?
+    if (!req.file) {
+        return res.status(400).json({ message: "Mana filenya plenger? Kosong gini!" });
+    }
+
+    // 2. Siapin data buat dimasukin ke tabel 'files' lu yang cakep itu
+    // Karena kita belom masang sistem gembok JWT di rute ini, kita tembak angka 1 dulu buat user_id nya. 
+    // Nanti di tahap penyempurnaan baru kita ganti pake ID asli dari token.
+    const idUser = 1; 
+    const namaFile = req.file.originalname; // Masuk ke kolom 'filename'
+    const pathFile = req.file.path; // Masuk ke kolom 'filepath' (isinya kek: uploads/17123987.png)
+
+    // 3. Catet di buku database Ubuntu lu pake struktur yang bener
+    const query = 'INSERT INTO files (user_id, filename, filepath) VALUES (?, ?, ?)';
+    
+    db.query(query, [idUser, namaFile, pathFile], (err, result) => {
+        if (err) {
+            return res.status(500).json({ message: "Gagal nyatet di Database Lerr", error: err.message });
+        }
+        
+        res.status(200).json({
+            message: "Sujud Syukur Abangku! File berhasil mendarat dengan aman!",
+            data_tersimpan: {
+                user_id: idUser,
+                filename: namaFile,
+                filepath: pathFile
+            }
+        });
+    });
+});
 // 6. Bikin rute API (endpoint) buat ngetes
 app.get('/', (req, res) => {
     res.send('Mantap! Mesin Backend HomeCloud udah nyala nih!');
