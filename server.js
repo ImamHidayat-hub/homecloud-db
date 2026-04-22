@@ -121,9 +121,36 @@ app.post('/login', (req, res) => {
 });
 
 // ==========================================
+// FUNGSI SATPAM: CEK TIKET JWT (MIDDLEWARE)
+// ==========================================
+const satpamTiket = (req, res, next) => {
+    // 1. Tangkep tiket dari header request
+    const tiket = req.headers['authorization'];
+    
+    // 2. Kalo kosong, usir!
+    if (!tiket) {
+        return res.status(403).json({ message: "Mana tiket lu Lerr? Login dulu sana!" });
+    }
+
+    // 3. Biasanya formatnya "Bearer tokenPanjangBanget", kita potong ambil tokennya doang
+    const tokenAsli = tiket.split(' ')[1];
+
+    // 4. Cek keaslian tiket pake rahasia dari .env
+    jwt.verify(tokenAsli, process.env.JWT_SECRET, (err, decoded) => {
+        if (err) {
+            return res.status(401).json({ message: "Tiket lu palsu atau udah kadaluarsa, plenger!" });
+        }
+        
+        // 5. Kalo tiket asli, simpen ID user-nya buat dipake di endpoint selanjutnya
+        req.user = decoded; 
+        next(); // Silakan lewat!
+    });
+};
+
+// ==========================================
 // ENDPOINT 3: UPLOAD FILE (JANTUNG HOMECLOUD)
 // ==========================================
-app.post('/upload', upload.single('fileKu'), (req, res) => {
+app.post('/upload', satpamTiket, upload.single('fileKu'), (req, res) => {
     // 1. Cek filenya beneran keangkut ga?
     if (!req.file) {
         return res.status(400).json({ message: "Mana filenya plenger? Kosong gini!" });
@@ -132,7 +159,7 @@ app.post('/upload', upload.single('fileKu'), (req, res) => {
     // 2. Siapin data buat dimasukin ke tabel 'files' lu yang cakep itu
     // Karena kita belom masang sistem gembok JWT di rute ini, kita tembak angka 1 dulu buat user_id nya. 
     // Nanti di tahap penyempurnaan baru kita ganti pake ID asli dari token.
-    const idUser = 1; 
+    const idUser = req.user.id; 
     const namaFile = req.file.originalname; // Masuk ke kolom 'filename'
     const pathFile = req.file.path; // Masuk ke kolom 'filepath' (isinya kek: uploads/17123987.png)
 
@@ -154,6 +181,63 @@ app.post('/upload', upload.single('fileKu'), (req, res) => {
         });
     });
 });
+
+// ==========================================
+// ENDPOINT 4: NAMPILIN DAFTAR FILE MILIK USER
+// ==========================================
+app.get('/files', satpamTiket, (req, res) => {
+    // Ambil ID user dari tiket JWT yang udah dicek sama satpam
+    const idUser = req.user.id; 
+
+    // Cari file di database yang user_id-nya sama kayak idUser
+    const query = 'SELECT id, filename, filepath, uploaded_at FROM files WHERE user_id = ?';
+    
+    db.query(query, [idUser], (err, results) => {
+        if (err) {
+            return res.status(500).json({ message: "Database ngereog Lerr", error: err.message });
+        }
+        
+        res.status(200).json({
+            message: "Ini daftar harta karun lu:",
+            total_file: results.length,
+            data: results
+        });
+    });
+});
+
+// ==========================================
+// ENDPOINT 5: DOWNLOAD FILE FISIK
+// ==========================================
+// ':id' itu ibarat parameter dinamis. Misal user mau download file nomor 3, URL-nya jadi /download/3
+app.get('/download/:id', satpamTiket, (req, res) => {
+    const idFile = req.params.id; // Ngambil angka dari URL
+    const idUser = req.user.id;   // Ngambil ID user yang lagi login
+
+    // 1. Cek dulu, file nomor segitu beneran ada ga? Dan beneran punya dia ga?
+    const query = 'SELECT filename, filepath FROM files WHERE id = ? AND user_id = ?';
+    
+    db.query(query, [idFile, idUser], (err, results) => {
+        if (err) return res.status(500).json({ message: "Database ngereog", error: err.message });
+        
+        // Kalo file ga ketemu atau dia nyoba nyolong file orang lain
+        if (results.length === 0) {
+            return res.status(404).json({ message: "File kagak ketemu atau lu nyoba nyolong file orang yak?!" });
+        }
+
+        const file = results[0];
+        
+        // 2. Rangkai alamat lengkap lokasi file fisiknya di dalem laptop Mukti
+        const lokasiFileLengkap = path.join(__dirname, file.filepath);
+
+        // 3. Paksa browser buat nge-download file tersebut
+        res.download(lokasiFileLengkap, file.filename, (err) => {
+            if (err) {
+                res.status(500).json({ message: "Gagal ngirim file fisiknya ke lu Lerr", error: err.message });
+            }
+        });
+    });
+});
+
 // 6. Bikin rute API (endpoint) buat ngetes
 app.get('/', (req, res) => {
     res.send('Mantap! Mesin Backend HomeCloud udah nyala nih!');
